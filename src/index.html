@@ -1,0 +1,195 @@
+<style>
+    html, body{
+        margin: 0;
+        height: 100%;
+        background: #07070c;
+        overflow: hidden;
+        touch-action: none;
+    }
+    canvas {
+        display: block;
+    }
+    #hint {
+        position: fixed;
+        inset: auto 0 24px;
+        text-align: center;
+        font: 12px/1 system-ui, sans-serif;
+        letter-spacing: .2em;
+        color: #fff6;
+        text-transform: uppercase;
+        pointer-events: none;
+        transition: opacity 1s;
+    }
+</style>
+<canvas id="c"></canvas>
+<div id="hint">Move to play! &middot; Click to make wave</div>
+<script>
+    const cv = document.getElementById('c');
+    const ctx = cv.getContext('2d');
+    const hint = document.getElementById('hint');
+
+    let w, h, ac, osc, sub, gain, filter;
+    const m = {x : 0, y : 0, px : 0, py : 0, on : false};
+    const parts = [], waves = [];
+    let hue = 0;
+
+    const resize = () => {
+        w = cv.width = innerWidth;
+        h = cv.height = innerHeight;
+    };
+    addEventListener('resize', resize);
+    resize();
+
+    function initAudio() {
+        if(!ac) {
+            ac = new (window.AudioContext || window.webkitAudioContext)();
+            filter = ac.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 2400;
+            gain = ac.createGain();
+            gain.gain.value = 0;
+            osc = ac.createOscillator();
+            osc.type = 'sine';
+            sub = ac.createOscillator();
+            sub.type = 'triangle';
+
+            const sg = ac.createGain();
+            sg.gain.value = 0.25;
+            osc.connect(gain);
+            sub.connect(sg);
+            sg.connect(gain);
+            gain.connect(filter);
+            filter.connect(ac.destination);
+            osc.start();
+            sub.start();
+        }
+        if (ac.state === 'suspended') ac.resume();
+    }
+
+    const freqAt = x => 150 + (x / w) * 1050;
+    const volAt = y => Math.pow(1 - y / h, 1.5) * 0.35;
+
+    function theremin() {
+        if(!ac) return;
+        const t = ac.currentTime;
+        const f = freqAt(m.x);
+        osc.frequency.setTargetAtTime(f, t, 0.33);
+        sub.frequency.setTargetAtTime(f / 2, t, 0.33);
+        gain.gain.setTargetAtTime(m.on ? volAt(m.y) : 0, t, 0.05);
+    }
+
+    function burst(x, y) {
+        waves.push({x, y, r : 0, h : hue});
+        for (let i = 0;i < 28;i++){
+            const a = Math.random() * 6.283;
+            const s = 2 + Math.random() * 6;
+            parts.push({
+                x,
+                y,
+                vx: Math.cos(a) * s,
+                vy: Math.sin(a) * s,
+                l: 1,
+                h: hue + Math.random() * 60
+            });
+        }
+        if(!ac) return;
+        const t = ac.currentTime;
+        const f = freqAt(x);
+        const g = ac.createGain();
+
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+        g.connect(ac.destination);
+
+        [1,2,3,4.01].forEach((k, i) => {
+            const o = ac.createOscillator();
+            const hg = ac.createGain();
+            o.type = 'sine';
+            o.frequency.value = f * k;
+            hg.gain.value = 0.5 / (i + 1);
+            o.connect(hg);
+            hg.connect(g);
+            o.start(t);
+            o.stop(t + 1.3);
+        });
+    }
+    function move(e) {
+        m.px = m.x;
+        m.py = m.y;
+        m.x = e.clientX;
+        m.y = e.clientY;
+        m.on = true;
+        const vx = m.x - m.px;
+        const vy = m.y - m.py;
+
+        for(let i = 0;i < 3;i++){
+            parts.push({
+                x: m.x,
+                y: m.y,
+                vx: vx * 0.15 + (Math.random() - .5) * 2,
+                vy: vy * 0.15 + (Math.random() - .5) * 2,
+                l: 1,
+                h: hue + Math.random() * 40
+            });
+        }
+        hint.style.opacity = 0;
+        theremin();
+    }
+    addEventListener('pointermove', move);
+    addEventListener('pointerdown', e => {
+        initAudio();
+        move(e);
+        burst(e.clientX, e.clientY);
+    });
+    addEventListener('pointerup', e => {
+        if(e.pointerType !== 'mouse'){
+            m.on = false;
+            theremin();
+        }
+    });
+    addEventListener('pointerleave', () => {
+        m.on = false;
+        theremin();
+    });
+
+    (function loop() {
+        hue = (hue + 0.6) % 360;
+        ctx.globalCompositieOperation = 'source-over';
+        ctx.fillStyle = 'rgba(7, 7, 12, .22)';
+        ctx.fillRect(0,0, w, h);
+        ctx.globalCompositieOperation = 'lighter';
+
+        for(let i = waves.length;i--;){
+            const W = waves[i];
+            W.r += 7;
+            const a = 1 - W.r / 300;
+            if(a <= 0){
+                waves.splice(i, 1);
+                continue;
+            }
+            ctx.strokeStyle = `hsla(${W.h}, 90%,65%,${a})`;
+            ctx.lineWidth = 2 + a * 3;
+            ctx.beginPath();
+            ctx.arc(w.x, w.y, w.r, 0, 6.283);
+            ctx.stroke();
+        }
+        for(let i = parts.length;i--;){
+            const p = parts[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vx *= 0.95;
+            p.vy *= 0.95;
+            p.l -= 0.015;
+            if(p.l <= 0){
+                parts.splice(i, 1);
+                continue;
+            }
+            ctx.fillStyle = `hsla(${p.h},90%,60%,${p.l})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 1 + p.l * 3, 0, 6.283);
+            ctx.fill();
+        }
+        requestAnimationFrame(loop);
+    })();
+</script>
